@@ -1,0 +1,11 @@
+name = "word-junction-lexical"
+main = "src/index.js"
+compatibility_date = "2026-08-30"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "word-junction"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[vars]
+CONCEPTNET_BASE = "https://api.conceptnet.io"
