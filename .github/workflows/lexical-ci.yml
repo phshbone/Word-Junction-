@@ -10,6 +10,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: worker
@@ -25,19 +26,25 @@ jobs:
         run: python -m pip install 'wn>=1.1,<2'
       - name: Run ranking tests
         run: node test/rank.test.mjs
-      - name: Build a real OEWN smoke seed
-        run: python tools/build_oewn_sql.py --limit 300 --buckets 8192 --out-dir build/smoke
-      - name: Validate generated SQL in SQLite
+      - name: Build complete OEWN shard seed
+        run: python tools/build_oewn_sql.py --buckets 8192 --out-dir build/oewn
+      - name: Validate complete generated SQL in SQLite
         run: |
-          sqlite3 build/smoke.sqlite < schema.sql
-          sqlite3 build/smoke.sqlite < build/smoke/oewn-shards.sql
-          sqlite3 build/smoke.sqlite "SELECT COUNT(*) AS populated_shards, SUM(entry_count) AS lemmas FROM lexical_shards;"
-          test "$(sqlite3 build/smoke.sqlite 'SELECT COUNT(*) FROM lexical_shards;')" -gt 0
+          sqlite3 build/oewn.sqlite < schema.sql
+          sqlite3 build/oewn.sqlite < build/oewn/oewn-shards.sql
+          sqlite3 build/oewn.sqlite "SELECT COUNT(*) AS populated_shards, SUM(entry_count) AS lemmas FROM lexical_shards;"
           python - <<'PY'
-          import json
-          m=json.load(open('build/smoke/manifest.json'))
-          assert m['senses']==300, m
+          import json, sqlite3
+          m=json.load(open('build/oewn/manifest.json'))
+          assert m['senses'] > 100000, m
+          assert m['lemmas'] > 100000, m
+          assert 0 < m['populated_buckets'] <= 8192, m
           assert m['max_payload_bytes'] < 90000, m
+          con=sqlite3.connect('build/oewn.sqlite')
+          rows=con.execute('select count(*) from lexical_shards').fetchone()[0]
+          entries=con.execute('select coalesce(sum(entry_count),0) from lexical_shards').fetchone()[0]
+          assert rows == m['populated_buckets'], (rows,m)
+          assert entries == m['lemmas'], (entries,m)
           print(m)
           PY
       - name: Verify common lookup words exist in OEWN
@@ -50,3 +57,11 @@ jobs:
               assert senses, f'missing expected OEWN word: {word}'
               print(word, senses[0].synset().definition())
           PY
+      - name: Upload validated D1 seed
+        uses: actions/upload-artifact@v4
+        with:
+          name: oewn-d1-seed
+          path: |
+            worker/build/oewn/oewn-shards.sql
+            worker/build/oewn/manifest.json
+          retention-days: 7
