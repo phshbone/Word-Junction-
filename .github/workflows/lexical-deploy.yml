@@ -1,0 +1,76 @@
+name: deploy lexical backend
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: worker
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Require Cloudflare credentials
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || (echo 'Missing CLOUDFLARE_API_TOKEN repository secret' && exit 1)
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || (echo 'Missing CLOUDFLARE_ACCOUNT_ID repository secret' && exit 1)
+      - name: Install OEWN tooling
+        run: python -m pip install 'wn>=1.1,<2'
+      - name: Run ranking tests
+        run: node test/rank.test.mjs
+      - name: Build complete OEWN D1 seed
+        run: python tools/build_oewn_sql.py --buckets 8192 --out-dir build/oewn
+      - name: Validate seed limits
+        run: |
+          python - <<'PY'
+          import json
+          m=json.load(open('build/oewn/manifest.json'))
+          assert m['senses'] > 100000, m
+          assert m['lemmas'] > 100000, m
+          assert m['max_payload_bytes'] < 90000, m
+          assert m['populated_buckets'] <= 8192, m
+          print(m)
+          PY
+      - name: Apply D1 schema
+        run: npx --yes wrangler@latest d1 execute word_junction --config wrangler.toml --remote --file schema.sql --yes
+      - name: Import complete OEWN dataset
+        run: npx --yes wrangler@latest d1 execute word_junction --config wrangler.toml --remote --file build/oewn/oewn-shards.sql --yes
+      - name: Verify imported D1 data
+        run: npx --yes wrangler@latest d1 execute word_junction --config wrangler.toml --remote --command "SELECT COUNT(*) AS shards, SUM(entry_count) AS lemmas FROM lexical_shards;" --yes
+      - name: Deploy lexical Worker
+        run: npx --yes wrangler@latest deploy --config wrangler.toml
+      - name: Smoke test deployed Worker
+        run: |
+          python - <<'PY'
+          import json, time, urllib.request
+          base='https://word-junction-lexical.phshbone.workers.dev'
+          def get(path):
+              last=None
+              for _ in range(8):
+                  try:
+                      with urllib.request.urlopen(base+path, timeout=20) as r:
+                          return json.load(r)
+                  except Exception as e:
+                      last=e; time.sleep(4)
+              raise last
+          health=get('/health')
+          assert health.get('ok'), health
+          assert health.get('entries',0) > 100000, health
+          for path in ('/lookup?word=junction&mode=similar','/lookup?word=clear&mode=similar','/lookup?word=clear&mode=opposite'):
+              data=get(path)
+              assert data.get('anchor',{}).get('word'), data
+              assert data.get('alternatives'), data
+              print(path, data['anchor']['word'], data['alternatives'][0]['word'])
+          print('health', health)
+          PY
