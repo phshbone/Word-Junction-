@@ -6,6 +6,7 @@ const JSON_HEADERS = {
   'access-control-allow-origin':'*',
   'access-control-allow-methods':'GET,OPTIONS',
 };
+const LEXICAL_BUCKETS = 8192;
 
 function json(data, status=200, extra={}) {
   return new Response(JSON.stringify(data), {status, headers:{...JSON_HEADERS,...extra}});
@@ -15,22 +16,64 @@ function posName(pos='') {
 }
 function termUri(word){ return `/c/en/${normalizeWord(word).replace(/\s+/g,'_')}`; }
 
+function fnv1a(text='') {
+  let h=2166136261;
+  for (const ch of text) {
+    h ^= ch.codePointAt(0);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+function bucketFor(word) {
+  return `b${String(fnv1a(normalizeWord(word)) % LEXICAL_BUCKETS).padStart(4,'0')}`;
+}
+
+async function shardSenses(db, word) {
+  const norm=normalizeWord(word);
+  const row=await db.prepare('SELECT payload_json FROM lexical_shards WHERE bucket=?')
+    .bind(bucketFor(norm)).first();
+  if (!row?.payload_json) return [];
+  try {
+    const payload=JSON.parse(row.payload_json);
+    return (payload[norm]||[]).map(s=>({
+      sense_id:s.id,
+      synset_id:s.ss,
+      lemma:s.l,
+      pos:s.p,
+      definition:s.d||'',
+      examples:s.e||[],
+      synonyms:s.syn||[],
+      antonyms:s.ant||[]
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function legacySenses(db, word) {
+  try {
+    const q = await db.prepare(`SELECT sense_id,synset_id,lemma,pos,definition,examples_json
+      FROM senses WHERE lemma_norm=? ORDER BY id LIMIT 12`).bind(normalizeWord(word)).all();
+    return (q.results||[]).map(s=>({...s,examples:JSON.parse(s.examples_json||'[]'),synonyms:[],antonyms:[]}));
+  } catch {
+    return [];
+  }
+}
+
 async function getSenses(db, word) {
-  const q = await db.prepare(`SELECT sense_id,synset_id,lemma,pos,definition,examples_json
-    FROM senses WHERE lemma_norm=? ORDER BY id LIMIT 12`).bind(normalizeWord(word)).all();
-  return q.results || [];
+  const sharded=await shardSenses(db,word);
+  return sharded.length?sharded:legacySenses(db,word);
 }
 
-async function getSynonymCandidates(db, sense) {
-  const q = await db.prepare(`SELECT lemma AS word,pos FROM sense_members
-    WHERE synset_id=? AND lemma_norm<>? LIMIT 24`).bind(sense.synset_id, normalizeWord(sense.lemma)).all();
-  return (q.results||[]).map(x => ({...x, sameSynset:true, directSynonym:true, samePos:x.pos===sense.pos, sameSense:true}));
+function synonymCandidates(sense) {
+  return (sense.synonyms||[]).map(([word,pos]) => ({
+    word,pos,sameSynset:true,directSynonym:true,samePos:pos===sense.pos,sameSense:true
+  }));
 }
-
-async function getAntonymCandidates(db, sense) {
-  const q = await db.prepare(`SELECT target_lemma AS word,target_pos AS pos,weight
-    FROM relations WHERE source_sense_id=? AND relation_type='antonym' LIMIT 24`).bind(sense.sense_id).all();
-  return (q.results||[]).map(x => ({...x, directAntonym:true, samePos:x.pos===sense.pos, sameSense:true}));
+function antonymCandidates(sense) {
+  return (sense.antonyms||[]).map(([word,pos]) => ({
+    word,pos,directAntonym:true,samePos:pos===sense.pos,sameSense:true
+  }));
 }
 
 async function conceptRelated(env, word) {
@@ -59,7 +102,7 @@ async function definitionFor(db, word, preferredPos='') {
   const senses = await getSenses(db, word);
   if (!senses.length) return null;
   const s = senses.find(x=>x.pos===preferredPos) || senses[0];
-  return {word:s.lemma,pos:posName(s.pos),definition:s.definition,examples:JSON.parse(s.examples_json||'[]'),senseId:s.sense_id};
+  return {word:s.lemma,pos:posName(s.pos),definition:s.definition,examples:s.examples||[],senseId:s.sense_id};
 }
 
 async function pairNote(db, anchor, target, relationType) {
@@ -74,8 +117,8 @@ function genericExplanation(anchor, target, mode, candidate) {
     distinction:`They are useful opposites in this sense, but context still determines whether either word fits naturally.`
   };
   if (candidate.sameSynset) return {
-    connection:`${anchor} and ${target} share the same WordNet sense here.`,
-    distinction:`Even close synonyms can differ in tone, frequency, or the situations where a speaker naturally chooses them.`
+    connection:`${anchor} and ${target} share this meaning closely.`,
+    distinction:`Even close synonyms can differ in tone, frequency, emphasis, or the situations where a speaker naturally chooses them.`
   };
   return {
     connection:`${anchor} and ${target} are semantically related in this sense.`,
@@ -90,7 +133,7 @@ async function lookup(env, word, mode='similar') {
   if (!senses.length) return {error:`“${word}” is not in the loaded Open English WordNet dataset.`};
 
   const sense = senses[0];
-  let candidates = mode==='opposite' ? await getAntonymCandidates(env.DB,sense) : await getSynonymCandidates(env.DB,sense);
+  let candidates = mode==='opposite' ? antonymCandidates(sense) : synonymCandidates(sense);
 
   if (mode==='similar') {
     const cn = await conceptRelated(env, norm).catch(()=>[]);
@@ -122,8 +165,9 @@ async function lookup(env, word, mode='similar') {
   return {
     query:norm,
     mode,
-    anchor:{word:sense.lemma,pos:posName(sense.pos),definition:sense.definition,examples:JSON.parse(sense.examples_json||'[]'),senseId:sense.sense_id},
+    anchor:{word:sense.lemma,pos:posName(sense.pos),definition:sense.definition,examples:(sense.examples||[]).slice(0,2),senseId:sense.sense_id},
     alternatives:decorated,
+    senses:senses.slice(0,8).map(s=>({senseId:s.sense_id,pos:posName(s.pos),definition:s.definition})),
     senseCount:senses.length,
     source:{dictionary:'Open English WordNet 2025',relatedness:'ConceptNet enrichment + Word Junction ranking'}
   };
@@ -134,8 +178,12 @@ export default {
     if (request.method==='OPTIONS') return new Response(null,{status:204,headers:JSON_HEADERS});
     const url=new URL(request.url);
     if (url.pathname==='/health') {
-      let count=0; try { count=(await env.DB.prepare('SELECT COUNT(*) AS n FROM senses').first())?.n||0; } catch {}
-      return json({ok:true,service:'word-junction-lexical',senses:count});
+      let entries=0; let shards=0;
+      try {
+        const r=await env.DB.prepare('SELECT COUNT(*) AS shards, COALESCE(SUM(entry_count),0) AS entries FROM lexical_shards').first();
+        shards=r?.shards||0; entries=r?.entries||0;
+      } catch {}
+      return json({ok:true,service:'word-junction-lexical',entries,shards});
     }
     if (url.pathname==='/lookup') {
       const result=await lookup(env,url.searchParams.get('word')||'',url.searchParams.get('mode')==='opposite'?'opposite':'similar');
