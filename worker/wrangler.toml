@@ -1,0 +1,11 @@
+name = "word-junction-lexical"
+main = "src/index.js"
+compatibility_date = "2026-08-30"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "word_junction"
+database_id = "49f88cf5-51a5-4e94-af07-74bb336e6a2f"
+
+[vars]
+CONCEPTNET_BASE = "https://api.conceptnet.io"
