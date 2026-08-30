@@ -1,5 +1,16 @@
 PRAGMA foreign_keys = ON;
 
+-- Primary OEWN store. Word data is packed into deterministic hash shards so the
+-- complete lexical dataset can be loaded on Cloudflare's free D1 write budget.
+CREATE TABLE IF NOT EXISTS lexical_shards (
+  bucket TEXT PRIMARY KEY,
+  payload_json TEXT NOT NULL,
+  entry_count INTEGER NOT NULL,
+  source TEXT NOT NULL DEFAULT 'oewn-2025'
+);
+
+-- Legacy normalized tables are retained for compatibility with early builds
+-- and for diagnostics. The production Worker reads lexical_shards first.
 CREATE TABLE IF NOT EXISTS senses (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   lemma TEXT NOT NULL,
