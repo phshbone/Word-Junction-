@@ -26,13 +26,20 @@ jobs:
       - name: Run ranking tests
         run: node test/rank.test.mjs
       - name: Build a real OEWN smoke seed
-        run: python tools/build_oewn_sql.py --limit 300 --chunk-statements 500 --out-dir build/smoke
+        run: python tools/build_oewn_sql.py --limit 300 --buckets 8192 --out-dir build/smoke
       - name: Validate generated SQL in SQLite
         run: |
           sqlite3 build/smoke.sqlite < schema.sql
-          for f in build/smoke/oewn-*.sql; do sqlite3 build/smoke.sqlite < "$f"; done
-          sqlite3 build/smoke.sqlite "SELECT COUNT(*) AS senses FROM senses; SELECT COUNT(*) AS members FROM sense_members; SELECT COUNT(*) AS antonyms FROM relations WHERE relation_type='antonym';"
-          test "$(sqlite3 build/smoke.sqlite 'SELECT COUNT(*) FROM senses;')" -eq 300
+          sqlite3 build/smoke.sqlite < build/smoke/oewn-shards.sql
+          sqlite3 build/smoke.sqlite "SELECT COUNT(*) AS populated_shards, SUM(entry_count) AS lemmas FROM lexical_shards;"
+          test "$(sqlite3 build/smoke.sqlite 'SELECT COUNT(*) FROM lexical_shards;')" -gt 0
+          python - <<'PY'
+          import json
+          m=json.load(open('build/smoke/manifest.json'))
+          assert m['senses']==300, m
+          assert m['max_payload_bytes'] < 90000, m
+          print(m)
+          PY
       - name: Verify common lookup words exist in OEWN
         run: |
           python - <<'PY'
