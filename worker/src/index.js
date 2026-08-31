@@ -67,13 +67,34 @@ async function getSenses(db, word) {
 
 function synonymCandidates(sense) {
   return (sense.synonyms||[]).map(([word,pos]) => ({
-    word,pos,sameSynset:true,directSynonym:true,samePos:pos===sense.pos,sameSense:true
+    word,pos,sourcePos:sense.pos,sameSynset:true,directSynonym:true,samePos:pos===sense.pos,sameSense:true
   }));
 }
 function antonymCandidates(sense) {
   return (sense.antonyms||[]).map(([word,pos]) => ({
-    word,pos,directAntonym:true,samePos:pos===sense.pos,sameSense:true
+    word,pos,sourcePos:sense.pos,directAntonym:true,samePos:pos===sense.pos,sameSense:true
   }));
+}
+
+function lexicalCandidates(senses, mode) {
+  const map=new Map();
+  for (const sense of senses) {
+    const items=mode==='opposite' ? antonymCandidates(sense) : synonymCandidates(sense);
+    for (const c of items) {
+      const key=normalizeWord(c.word);
+      if (!key) continue;
+      const old=map.get(key);
+      map.set(key, old ? {
+        ...old,
+        directSynonym:Boolean(old.directSynonym||c.directSynonym),
+        directAntonym:Boolean(old.directAntonym||c.directAntonym),
+        sameSynset:Boolean(old.sameSynset||c.sameSynset),
+        samePos:Boolean(old.samePos||c.samePos),
+        sameSense:Boolean(old.sameSense||c.sameSense),
+      } : c);
+    }
+  }
+  return [...map.values()];
 }
 
 async function conceptRelated(env, word) {
@@ -132,8 +153,9 @@ async function lookup(env, word, mode='similar') {
   const senses = await getSenses(env.DB, norm);
   if (!senses.length) return {error:`“${word}” is not in the loaded Open English WordNet dataset.`};
 
-  const sense = senses[0];
-  let candidates = mode==='opposite' ? antonymCandidates(sense) : synonymCandidates(sense);
+  const relationKey=mode==='opposite' ? 'antonyms' : 'synonyms';
+  const anchorSense=senses.find(s=>Array.isArray(s[relationKey]) && s[relationKey].length) || senses[0];
+  let candidates=lexicalCandidates(senses,mode);
 
   if (mode==='similar') {
     const cn = await conceptRelated(env, norm).catch(()=>[]);
@@ -148,10 +170,10 @@ async function lookup(env, word, mode='similar') {
   const ranked=rankCandidates(candidates,{anchor:norm}).slice(0,12);
   const decorated=[];
   for (const c of ranked) {
-    const d=await definitionFor(env.DB,c.word,sense.pos);
+    const d=await definitionFor(env.DB,c.word,c.sourcePos||anchorSense.pos);
     if (!d) continue;
     const note=await pairNote(env.DB,norm,c.word,mode);
-    const generic=genericExplanation(sense.lemma,d.word,mode,c);
+    const generic=genericExplanation(anchorSense.lemma,d.word,mode,c);
     decorated.push({
       word:d.word,pos:d.pos,definition:d.definition,
       label:chooseRelationLabel(mode,c),score:Math.round(c.score*10)/10,
@@ -165,7 +187,7 @@ async function lookup(env, word, mode='similar') {
   return {
     query:norm,
     mode,
-    anchor:{word:sense.lemma,pos:posName(sense.pos),definition:sense.definition,examples:(sense.examples||[]).slice(0,2),senseId:sense.sense_id},
+    anchor:{word:anchorSense.lemma,pos:posName(anchorSense.pos),definition:anchorSense.definition,examples:(anchorSense.examples||[]).slice(0,2),senseId:anchorSense.sense_id},
     alternatives:decorated,
     senses:senses.slice(0,8).map(s=>({senseId:s.sense_id,pos:posName(s.pos),definition:s.definition})),
     senseCount:senses.length,
