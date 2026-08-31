@@ -43,15 +43,38 @@ jobs:
       - name: Live smoke test
         run: |
           python - <<'PY'
-          import json, urllib.request
+          import json, urllib.error, urllib.request
+
           base='https://word-junction-lexical.phshbone.workers.dev'
-          for path in ('/health','/lookup?word=clear&mode=similar','/lookup?word=clear&mode=opposite','/lookup?word=junction&mode=similar'):
-              with urllib.request.urlopen(base+path, timeout=30) as r:
-                  body=json.load(r)
-              print(path, body if path=='/health' else {'query':body.get('query'),'alternatives':len(body.get('alternatives',[]))})
-              if path=='/health':
-                  assert body.get('ok') is True
+          checks=(
+              ('/health', 'health'),
+              ('/lookup?word=clear&mode=similar', 'lookup'),
+              ('/lookup?word=hot&mode=opposite', 'lookup'),
+              ('/lookup?word=junction&mode=similar', 'lookup'),
+          )
+
+          for path, kind in checks:
+              try:
+                  with urllib.request.urlopen(base+path, timeout=30) as r:
+                      status=r.status
+                      body=json.load(r)
+              except urllib.error.HTTPError as e:
+                  payload=e.read().decode('utf-8', 'replace')
+                  raise AssertionError(f'{path} returned HTTP {e.code}: {payload}') from e
+
+              print(path, {'status':status, **(body if kind=='health' else {
+                  'query':body.get('query'),
+                  'mode':body.get('mode'),
+                  'alternatives':len(body.get('alternatives',[])),
+                  'error':body.get('error'),
+              })})
+
+              assert status == 200, (path, status, body)
+              if kind=='health':
+                  assert body.get('ok') is True, body
+                  assert body.get('shards', 0) > 0, body
+                  assert body.get('entries', 0) > 0, body
               else:
-                  assert body.get('query')
-                  assert body.get('alternatives')
+                  assert body.get('query'), body
+                  assert body.get('alternatives'), body
           PY
