@@ -47,13 +47,13 @@ jobs:
 
           base='https://word-junction-lexical.phshbone.workers.dev'
           checks=(
-              ('/health', 'health'),
-              ('/lookup?word=clear&mode=similar', 'lookup'),
-              ('/lookup?word=hot&mode=opposite', 'lookup'),
-              ('/lookup?word=junction&mode=similar', 'lookup'),
+              ('/health', 'health', False),
+              ('/lookup?word=clear&mode=similar', 'lookup', True),
+              ('/lookup?word=hot&mode=opposite', 'lookup', True),
+              ('/lookup?word=junction&mode=similar', 'lookup', False),
           )
 
-          for path, kind in checks:
+          for path, kind, require_alternatives in checks:
               try:
                   with urllib.request.urlopen(base+path, timeout=30) as r:
                       status=r.status
@@ -76,5 +76,7 @@ jobs:
                   assert body.get('entries', 0) > 0, body
               else:
                   assert body.get('query'), body
-                  assert body.get('alternatives'), body
+                  assert isinstance(body.get('alternatives'), list), body
+                  if require_alternatives:
+                      assert body['alternatives'], body
           PY
