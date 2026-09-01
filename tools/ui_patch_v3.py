@@ -1,0 +1,54 @@
+from pathlib import Path
+import re
+
+p=Path('index.html')
+s=p.read_text()
+
+s=s.replace('.word{font-family:Georgia,"Times New Roman",serif;font-size:clamp(48px,10vw,78px);', '.word{font-family:Georgia,"Times New Roman",serif;font-size:clamp(44px,8.5vw,70px);', 1)
+s=s.replace('.definition{font-size:15.5px}.small-action', '.word{font-size:clamp(40px,10vw,54px)}.definition{font-size:15.5px}.small-action', 1)
+s=s.replace('<div class="build-marker" id="buildMarker">two-card-junction-v2</div>', '<div class="build-marker" id="buildMarker">two-card-junction-v3</div>', 1)
+
+s=s.replace("let state={word:'practical',mode:'similar',data:null,index:0,label:\"Today's word\",loading:false,senseNotice:''};", "let state={word:'practical',mode:'similar',data:null,index:0,label:\"Today's word\",loading:false,senseNotice:'',reversed:false};", 1)
+s=s.replace("function current(){return state.data?.alternatives?.[state.index]||null}\nfunction snapshot(){return {word:state.word,mode:state.mode,index:state.index,label:state.label,data:state.data,senseNotice:state.senseNotice||''}}", "function current(){return state.data?.alternatives?.[state.index]||null}\nfunction displayPair(){const a=state.data?.anchor,r=current();return state.reversed?{top:r,bottom:a}:{top:a,bottom:r}}\nfunction snapshot(){return {word:state.word,mode:state.mode,index:state.index,label:state.label,data:state.data,senseNotice:state.senseNotice||'',reversed:!!state.reversed}}", 1)
+
+old_speak="function speak(text){if(!text)return;if(!('speechSynthesis'in window)){toast('Speech is not available here.');return}try{const synth=window.speechSynthesis;synth.cancel();synth.resume();const u=new SpeechSynthesisUtterance(text);u.lang='en-US';u.rate=.86;u.pitch=1;u.volume=1;const voices=synth.getVoices();const voice=voices.find(v=>/^en-US/i.test(v.lang))||voices.find(v=>/^en/i.test(v.lang));if(voice)u.voice=voice;u.onerror=()=>toast('Pronunciation did not play. Try again.');setTimeout(()=>{synth.resume();synth.speak(u)},0)}catch(e){toast('Pronunciation did not play. Try again.')}}"
+new_speak="function speak(text){if(!text)return;if(!('speechSynthesis'in window)){toast('Speech is not available here.');return}try{const synth=window.speechSynthesis;const u=new SpeechSynthesisUtterance(text);u.lang='en-US';u.rate=.86;u.pitch=1;u.volume=1;const voices=synth.getVoices();const voice=voices.find(v=>/^en-US/i.test(v.lang))||voices.find(v=>/^en/i.test(v.lang));if(voice)u.voice=voice;u.onerror=()=>toast('Pronunciation did not play. Try again.');synth.cancel();synth.resume();synth.speak(u)}catch(e){toast('Pronunciation did not play. Try again.')}}"
+if old_speak not in s: raise SystemExit('speak source not found')
+s=s.replace(old_speak,new_speak,1)
+
+start=s.index('function render(){')
+end=s.index('\nasync function loadWord',start)
+new_render="""function render(){const d=state.data,pair=displayPair(),a=pair.top,r=pair.bottom,opp=state.mode==='opposite';if(!a)return;els.anchorWord.textContent=a.word||state.word;els.anchorPart.textContent=a.pos||'word';els.anchorDefinition.textContent=a.definition||'No definition available for this sense.';$('#anchorLabel').textContent=state.label;els.relatedLabel.textContent=opp?'Opposite word':'Related word';els.relatedLabel.classList.toggle('opposite',opp);els.junction.classList.toggle('opposite',opp);els.connectionNote.classList.toggle('opposite',opp);els.exploreBtn.classList.toggle('opposite',opp);els.similarTab.classList.toggle('active',!opp);els.oppositeTab.classList.toggle('active',opp);els.similarTab.setAttribute('aria-selected',String(!opp));els.oppositeTab.setAttribute('aria-selected',String(opp));els.senseNotice.textContent=state.senseNotice||'';els.senseNotice.classList.toggle('show',!!state.senseNotice);els.senseNotice.classList.toggle('opposite',opp);
+if(r){const rel=current();els.relatedWord.textContent=r.word;els.relatedPart.textContent=r.pos||'word';els.relatedDefinition.textContent=r.definition||'';els.relationshipPill.textContent=rel?.label||(opp?'Opposite in this sense':'Connected in this sense');els.connectionNote.textContent=rel?.connection||'';els.difference.textContent=rel?.distinction||'';els.exploreBtn.disabled=false;$('#changeAnchor').disabled=false;$('#changeRelated').disabled=false;els.anotherBtn.disabled=false;$('#hearBtn').disabled=false;$('#exampleBtn').disabled=false;els.saveBtn.disabled=false;els.saveBtn.textContent=saved.some(x=>x.a===a.word&&x.b===r.word&&x.mode===state.mode)?'♥ Saved':'♡ Save'}else{els.relatedWord.textContent='—';els.relatedPart.textContent='';els.relatedDefinition.textContent=opp?'No direct antonym was found for this sense.':'No related alternative was found for this sense.';els.relationshipPill.textContent='No connection found';els.connectionNote.textContent='Try the other direction or choose another word.';els.difference.textContent='';els.exploreBtn.disabled=true;$('#changeAnchor').disabled=true;els.anotherBtn.disabled=true;$('#changeRelated').disabled=true;$('#hearBtn').disabled=true;$('#exampleBtn').disabled=true;els.saveBtn.disabled=true}els.backBtn.disabled=!history.length;$('#sourceNote').textContent=d?.source?.dictionary==='offline fallback'?'Offline fallback is active. Reconnect for the full Open English WordNet experience.':'Open English WordNet 2025 + Word Junctions ranking. Each card shows the exact sense used by this relationship.'}"""
+s=s[:start]+new_render+s[end:]
+
+s=s.replace("state={word:data.query||word,mode:data.mode||mode,data,index:0,label,loading:false,senseNotice};", "state={word:data.query||word,mode:data.mode||mode,data,index:0,label,loading:false,senseNotice,reversed:false};", 1)
+s=s.replace("state={word,mode,data:fallback,index:0,label,loading:false,senseNotice:''};", "state={word,mode,data:fallback,index:0,label,loading:false,senseNotice:'',reversed:false};", 1)
+
+old_funcs="async function setMode(mode){if(mode===state.mode)return;await loadWord(state.word,mode,{push:true,label:state.label,compareSense:true}).catch(()=>{})}\nasync function another(){const list=state.data?.alternatives||[];const r=current();if(!r)return;if(list.length<2){await loadWord(r.word,state.mode,{push:true,label:'Your word'}).catch(()=>{});return}await animateCard(els.relatedCard,()=>{state.index=(state.index+1)%list.length;render()})}\nasync function branchAnchor(){const list=state.data?.alternatives||[];if(!list.length){toast('No connected word is available from this sense.');return}const pool=list.filter((_,i)=>i!==state.index);const pick=(pool.length?pool:list)[Math.floor(Math.random()*(pool.length?pool.length:list.length))];await loadWord(pick.word,state.mode,{push:true,label:'Connected word'}).catch(()=>{})}"
+new_funcs="""async function setMode(mode){if(mode===state.mode)return;const top=displayPair().top?.word||state.word;await loadWord(top,mode,{push:true,label:state.label,compareSense:true}).catch(()=>{})}
+function noMoreMessage(fixed){return state.mode==='opposite'?`No other opposite words were found for ${fixed}.`:`No other similar words were found for ${fixed}.`}
+async function refreshCard(which){if(state.loading)return;const pair=displayPair(),fixed=which==='top'?pair.bottom:pair.top,changing=which==='top'?pair.top:pair.bottom;if(!fixed?.word||!changing?.word)return;state.loading=true;setStatus(`Finding another connection for “${fixed.word}”…`);try{const data=await fetchLookup(fixed.word,state.mode);const choices=(data.alternatives||[]).map((x,i)=>({x,i})).filter(o=>o.x.word!==changing.word);if(!choices.length){state.loading=false;setStatus('');toast(noMoreMessage(fixed.word));return}const pick=choices[Math.floor(Math.random()*choices.length)];history.push(snapshot());const apply=()=>{state={word:which==='top'?pick.x.word:data.anchor.word,mode:state.mode,data,index:pick.i,label:state.label,loading:false,senseNotice:'',reversed:which==='top'};setStatus('');render()};await animateCard(which==='top'?els.anchorCard:els.relatedCard,apply)}catch(err){state.loading=false;setStatus('');toast('Could not load another connection.')}}
+async function another(){await refreshCard('bottom')}
+async function branchAnchor(){await refreshCard('top')}"""
+if old_funcs not in s: raise SystemExit('branch source not found')
+s=s.replace(old_funcs,new_funcs,1)
+
+s=s.replace("async function explore(){const r=current();if(!r)return;await animateCard(els.relatedCard,()=>{});await loadWord(r.word,'similar',{push:true,label:'Your word'}).catch(()=>{})}", "async function explore(){const r=displayPair().bottom;if(!r)return;await animateCard(els.relatedCard,()=>{});await loadWord(r.word,'similar',{push:true,label:'Your word'}).catch(()=>{})}",1)
+s=s.replace("function saveCurrent(){const a=state.data?.anchor,r=current();", "function saveCurrent(){const {top:a,bottom:r}=displayPair();",1)
+s=s.replace("function showExamples(){const a=state.data?.anchor,r=current();", "function showExamples(){const {top:a,bottom:r}=displayPair();",1)
+s=s.replace("$('#speakAnchor').onclick=()=>speak(state.data?.anchor?.word);$('#speakRelated').onclick=()=>speak(current()?.word);$('#hearBtn').onclick=()=>speak(current()?.word);", "$('#speakAnchor').onclick=()=>speak(displayPair().top?.word);$('#speakRelated').onclick=()=>speak(displayPair().bottom?.word);$('#hearBtn').onclick=()=>speak(displayPair().bottom?.word);",1)
+
+p.write_text(s)
+
+sw=Path('sw.js')
+w=sw.read_text()
+w2=re.sub(r'word-junctions-v\d+','word-junctions-v10',w,count=1)
+sw.write_text(w2)
+
+s=p.read_text()
+for marker in ['two-card-junction-v3','function displayPair()','async function refreshCard(which)','No other similar words were found','synth.speak(u)']:
+    assert marker in s, marker
+assert "setTimeout(()=>{synth.resume();synth.speak(u)},0)" not in s
+assert 'font-size:clamp(44px,8.5vw,70px)' in s
+print('UI v3 patch PASS')
