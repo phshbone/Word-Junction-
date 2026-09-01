@@ -1,0 +1,58 @@
+name: frontend smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'manifest.webmanifest'
+      - 'sw.js'
+      - '.github/workflows/frontend-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check required UI structure
+        run: |
+          grep -q 'two-card-junction-v1' index.html
+          grep -q 'id="anchorCard"' index.html
+          grep -q 'id="relatedCard"' index.html
+          grep -q 'class="junction-pipe"' index.html
+          grep -q 'id="similarTab"' index.html
+          grep -q 'id="oppositeTab"' index.html
+          grep -q 'id="wordDialog"' index.html
+          grep -q 'id="backBtn"' index.html
+          grep -q 'id="saveBtn"' index.html
+          ! grep -q 'id="relationDialog"' index.html
+      - name: Check inline JavaScript syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          html=Path('index.html').read_text()
+          start=html.index('<script>')+len('<script>')
+          end=html.index('</script>', start)
+          Path('/tmp/word-junctions-app.js').write_text(html[start:end])
+          PY
+          node --check /tmp/word-junctions-app.js
+      - name: Check lexical backend
+        run: |
+          python - <<'PY'
+          import json, urllib.request
+          base='https://word-junction-lexical.phshbone.workers.dev'
+          headers={'User-Agent':'Mozilla/5.0 Word-Junctions-Smoke/1.0','Accept':'application/json'}
+          for path in ['/health','/lookup?word=motion&mode=similar','/lookup?word=motion&mode=opposite']:
+              req=urllib.request.Request(base+path,headers=headers)
+              with urllib.request.urlopen(req,timeout=30) as r:
+                  body=json.load(r)
+                  assert r.status==200
+                  if path!='/health':
+                      assert body.get('anchor',{}).get('word')=='motion'
+                      assert isinstance(body.get('alternatives'),list)
+          print('frontend smoke passed')
+          PY
