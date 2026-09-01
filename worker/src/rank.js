@@ -9,12 +9,18 @@ export function rankCandidate(candidate, context={}) {
   if (!candidate || !candidate.word) return -Infinity;
   const word = normalizeWord(candidate.word);
   if (!word || word === normalizeWord(context.anchor)) return -Infinity;
-  if (candidate.directSynonym) score += 80;
-  if (candidate.directAntonym) score += 95;
-  if (candidate.sameSynset) score += 70;
-  if (candidate.conceptWeight) score += Math.max(-20, Math.min(35, candidate.conceptWeight * 35));
-  if (candidate.samePos) score += 16;
-  if (candidate.sameSense) score += 22;
+
+  // Exact lexical evidence outranks broad semantic relatedness.
+  if (candidate.directAntonym) score += 120;
+  if (candidate.directSynonym) score += 110;
+  if (candidate.sameSynset) score += 100;
+  if (candidate.sameSense) score += 45;
+  if (candidate.samePos) score += 35;
+
+  // ConceptNet remains useful for a future "related ideas" mode, but it must
+  // not outrank exact WordNet sense evidence in Similar/Opposite mode.
+  if (candidate.conceptWeight) score += Math.max(-20, Math.min(20, candidate.conceptWeight * 20));
+
   if (candidate.definition) score += 8;
   if (candidate.frequency != null) score += Math.max(0, Math.min(22, candidate.frequency));
   if (candidate.multiword) score -= 5;
@@ -23,16 +29,20 @@ export function rankCandidate(candidate, context={}) {
   if (candidate.technical && !context.allowTechnical) score -= 18;
   if (candidate.properNoun) score -= 40;
   if (candidate.pos && !COMMON_POS.has(candidate.pos)) score -= 4;
+  if (candidate.crossPos) score -= 100;
   return score;
 }
 
 export function rankCandidates(candidates, context={}) {
-  return candidates.map(c => ({...c, score: rankCandidate(c, context)})).filter(c => Number.isFinite(c.score)).sort((a,b) => b.score - a.score || a.word.localeCompare(b.word));
+  return candidates
+    .map(c => ({...c, score: rankCandidate(c, context)}))
+    .filter(c => Number.isFinite(c.score))
+    .sort((a,b) => b.score - a.score || a.word.localeCompare(b.word));
 }
 
 export function chooseRelationLabel(mode, candidate) {
-  if (mode === 'opposite') return candidate.directAntonym ? 'Direct opposite' : 'Contrasting meaning';
-  if (candidate.sameSynset) return 'Very close in meaning';
-  if (candidate.directSynonym) return 'Close synonym';
-  return 'Related, not interchangeable';
+  if (mode === 'opposite') return candidate.directAntonym ? 'Direct opposite in this sense' : 'Contrasting meaning';
+  if (candidate.sameSynset) return 'Same dictionary sense';
+  if (candidate.directSynonym) return 'Direct synonym';
+  return 'Related idea';
 }
