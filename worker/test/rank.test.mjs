@@ -1,12 +1,18 @@
 import assert from 'node:assert/strict';
 import {rankCandidates,normalizeWord,chooseRelationLabel} from '../src/rank.js';
+
 assert.equal(normalizeWord('  Clear   Thinking '),'clear thinking');
+
 const ranked=rankCandidates([
-  {word:'lucid',directSynonym:true,sameSynset:true,samePos:true,definition:'clear'},
-  {word:'pellucid',directSynonym:true,sameSynset:true,samePos:true,definition:'clear',obscure:true},
-  {word:'transparent',conceptWeight:.7,samePos:true,definition:'allows light through'}
+  {word:'lucid',directSynonym:true,sameSynset:true,samePos:true,sameSense:true,definition:'clear'},
+  {word:'pellucid',directSynonym:true,sameSynset:true,samePos:true,sameSense:true,definition:'clear',obscure:true},
+  {word:'transparent',conceptWeight:.7,samePos:true,definition:'allows light through'},
+  {word:'clarify',directSynonym:true,sameSense:true,crossPos:true,pos:'v'}
 ],{anchor:'clear'});
+
 assert.equal(ranked[0].word,'lucid');
-assert.equal(chooseRelationLabel('similar',ranked[0]),'Very close in meaning');
-assert.equal(chooseRelationLabel('opposite',{directAntonym:true}),'Direct opposite');
+assert.ok(ranked.findIndex(x=>x.word==='clarify') > ranked.findIndex(x=>x.word==='transparent'));
+assert.equal(chooseRelationLabel('similar',ranked[0]),'Same dictionary sense');
+assert.equal(chooseRelationLabel('similar',{directSynonym:true}),'Direct synonym');
+assert.equal(chooseRelationLabel('opposite',{directAntonym:true}),'Direct opposite in this sense');
 console.log('rank tests passed');
