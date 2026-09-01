@@ -14,7 +14,6 @@ function json(data, status=200, extra={}) {
 function posName(pos='') {
   return ({n:'noun',v:'verb',a:'adjective',s:'adjective',r:'adverb'})[pos] || pos || 'word';
 }
-function termUri(word){ return `/c/en/${normalizeWord(word).replace(/\s+/g,'_')}`; }
 
 function fnv1a(text='') {
   let h=2166136261;
@@ -65,65 +64,78 @@ async function getSenses(db, word) {
   return sharded.length?sharded:legacySenses(db,word);
 }
 
+function unpackRelation(entry) {
+  if (!Array.isArray(entry)) return {word:'',pos:'',targetSenseId:null,targetSynsetId:null};
+  return {
+    word:entry[0]||'',
+    pos:entry[1]||'',
+    targetSenseId:entry[2]||null,
+    targetSynsetId:entry[3]||null,
+  };
+}
+
 function synonymCandidates(sense) {
-  return (sense.synonyms||[]).map(([word,pos]) => ({
-    word,pos,sourcePos:sense.pos,sameSynset:true,directSynonym:true,samePos:pos===sense.pos,sameSense:true
-  }));
+  return (sense.synonyms||[]).map(entry => {
+    const rel=unpackRelation(entry);
+    return {
+      ...rel,
+      sourceSenseId:sense.sense_id,
+      sourceSynsetId:sense.synset_id,
+      sourcePos:sense.pos,
+      directSynonym:true,
+      sameSynset:true,
+      samePos:rel.pos===sense.pos,
+      sameSense:true,
+      crossPos:rel.pos!==sense.pos,
+    };
+  });
 }
 function antonymCandidates(sense) {
-  return (sense.antonyms||[]).map(([word,pos]) => ({
-    word,pos,sourcePos:sense.pos,directAntonym:true,samePos:pos===sense.pos,sameSense:true
-  }));
+  return (sense.antonyms||[]).map(entry => {
+    const rel=unpackRelation(entry);
+    return {
+      ...rel,
+      sourceSenseId:sense.sense_id,
+      sourceSynsetId:sense.synset_id,
+      sourcePos:sense.pos,
+      directAntonym:true,
+      samePos:rel.pos===sense.pos,
+      sameSense:true,
+      crossPos:rel.pos!==sense.pos,
+    };
+  });
 }
 
-function lexicalCandidates(senses, mode) {
-  const map=new Map();
-  for (const sense of senses) {
-    const items=mode==='opposite' ? antonymCandidates(sense) : synonymCandidates(sense);
-    for (const c of items) {
-      const key=normalizeWord(c.word);
-      if (!key) continue;
-      const old=map.get(key);
-      map.set(key, old ? {
-        ...old,
-        directSynonym:Boolean(old.directSynonym||c.directSynonym),
-        directAntonym:Boolean(old.directAntonym||c.directAntonym),
-        sameSynset:Boolean(old.sameSynset||c.sameSynset),
-        samePos:Boolean(old.samePos||c.samePos),
-        sameSense:Boolean(old.sameSense||c.sameSense),
-      } : c);
-    }
-  }
-  return [...map.values()];
+function candidatesForSense(sense, mode) {
+  const items=mode==='opposite' ? antonymCandidates(sense) : synonymCandidates(sense);
+  // Quality rule: Similar/Opposite should compare like grammatical roles.
+  const samePos=items.filter(c=>c.samePos);
+  return samePos.length?samePos:[];
 }
 
-async function conceptRelated(env, word) {
-  const norm = normalizeWord(word);
-  const cached = await env.DB.prepare('SELECT payload_json,fetched_at FROM concept_cache WHERE term_norm=?').bind(norm).first();
-  const maxAge = 60*60*24*30;
-  if (cached && (Date.now()/1000 - cached.fetched_at) < maxAge) {
-    try { return JSON.parse(cached.payload_json); } catch {}
-  }
-  const base = env.CONCEPTNET_BASE || 'https://api.conceptnet.io';
-  const url = `${base}/related${termUri(norm)}?filter=/c/en&limit=30`;
-  const r = await fetch(url, {headers:{accept:'application/json'}});
-  if (!r.ok) return [];
-  const body = await r.json();
-  const items = (body.related||[]).map(x => ({
-    word:(x['@id']||'').replace('/c/en/','').replaceAll('_',' '),
-    conceptWeight:Number(x.weight)||0
-  })).filter(x=>x.word && normalizeWord(x.word)!==norm);
-  await env.DB.prepare(`INSERT INTO concept_cache(term_norm,payload_json,fetched_at) VALUES(?,?,?)
-    ON CONFLICT(term_norm) DO UPDATE SET payload_json=excluded.payload_json,fetched_at=excluded.fetched_at`)
-    .bind(norm, JSON.stringify(items), Math.floor(Date.now()/1000)).run();
-  return items;
+function chooseAnchorSense(senses, mode) {
+  // Prefer the earliest WordNet sense that has a same-POS relationship. This
+  // keeps the displayed definition tied to the exact relationship being used.
+  return senses.find(s=>candidatesForSense(s,mode).length) || senses[0];
 }
 
-async function definitionFor(db, word, preferredPos='') {
-  const senses = await getSenses(db, word);
+async function exactTargetSense(db, candidate) {
+  const senses=await getSenses(db,candidate.word);
   if (!senses.length) return null;
-  const s = senses.find(x=>x.pos===preferredPos) || senses[0];
-  return {word:s.lemma,pos:posName(s.pos),definition:s.definition,examples:s.examples||[],senseId:s.sense_id};
+
+  if (candidate.targetSenseId) {
+    const bySense=senses.find(s=>s.sense_id===candidate.targetSenseId);
+    if (bySense) return bySense;
+  }
+  if (candidate.targetSynsetId) {
+    const bySynset=senses.find(s=>s.synset_id===candidate.targetSynsetId);
+    if (bySynset) return bySynset;
+  }
+  if (candidate.sameSynset && candidate.sourceSynsetId) {
+    const same=senses.find(s=>s.synset_id===candidate.sourceSynsetId);
+    if (same) return same;
+  }
+  return senses.find(s=>s.pos===candidate.sourcePos) || null;
 }
 
 async function pairNote(db, anchor, target, relationType) {
@@ -132,18 +144,34 @@ async function pairNote(db, anchor, target, relationType) {
     .bind(normalizeWord(anchor),normalizeWord(target),relationType).first();
 }
 
-function genericExplanation(anchor, target, mode, candidate) {
-  if (mode==='opposite') return {
-    connection:`${anchor} and ${target} point in contrasting directions.`,
-    distinction:`They are useful opposites in this sense, but context still determines whether either word fits naturally.`
-  };
-  if (candidate.sameSynset) return {
-    connection:`${anchor} and ${target} share this meaning closely.`,
-    distinction:`Even close synonyms can differ in tone, frequency, emphasis, or the situations where a speaker naturally chooses them.`
-  };
+function cleanGloss(text='') {
+  return String(text).trim().replace(/[.;:]$/,'');
+}
+
+function groundedExplanation(anchorSense, targetSense, mode, candidate) {
+  const anchor=anchorSense.lemma;
+  const target=targetSense.lemma;
+  const gloss=cleanGloss(anchorSense.definition);
+
+  if (mode==='opposite') {
+    return {
+      connection:`In this sense, ${target} is a direct antonym of ${anchor}.`,
+      distinction:`This opposition belongs to the displayed ${posName(anchorSense.pos)} sense${gloss?` — “${gloss}.”`:'.'} Other senses of either word may not be opposites.`
+    };
+  }
+
+  if (candidate.sameSynset) {
+    return {
+      connection:gloss
+        ? `Both words can express this sense: “${gloss}.”`
+        : `${anchor} and ${target} are grouped in the same Open English WordNet sense.`,
+      distinction:`Open English WordNet treats them as synonyms in this exact sense. Word Junction will only claim a finer difference in tone or usage when that distinction is specifically supported for this pair.`
+    };
+  }
+
   return {
-    connection:`${anchor} and ${target} are semantically related in this sense.`,
-    distinction:`They are related, not automatically interchangeable; their exact fit depends on meaning and context.`
+    connection:`${anchor} and ${target} are related in the displayed sense.`,
+    distinction:`Word Junction does not have enough exact lexical evidence to call them interchangeable.`
   };
 }
 
@@ -153,45 +181,57 @@ async function lookup(env, word, mode='similar') {
   const senses = await getSenses(env.DB, norm);
   if (!senses.length) return {error:`“${word}” is not in the loaded Open English WordNet dataset.`};
 
-  const relationKey=mode==='opposite' ? 'antonyms' : 'synonyms';
-  const anchorSense=senses.find(s=>Array.isArray(s[relationKey]) && s[relationKey].length) || senses[0];
-  let candidates=lexicalCandidates(senses,mode);
+  const anchorSense=chooseAnchorSense(senses,mode);
+  let candidates=candidatesForSense(anchorSense,mode);
+  candidates=rankCandidates(candidates,{anchor:norm}).slice(0,12);
 
-  if (mode==='similar') {
-    const cn = await conceptRelated(env, norm).catch(()=>[]);
-    const map = new Map(candidates.map(c=>[normalizeWord(c.word),c]));
-    for (const c of cn) {
-      const key=normalizeWord(c.word); const old=map.get(key)||{};
-      map.set(key,{...c,...old,word:old.word||c.word,conceptWeight:Math.max(old.conceptWeight||0,c.conceptWeight||0)});
-    }
-    candidates=[...map.values()];
-  }
-
-  const ranked=rankCandidates(candidates,{anchor:norm}).slice(0,12);
   const decorated=[];
-  for (const c of ranked) {
-    const d=await definitionFor(env.DB,c.word,c.sourcePos||anchorSense.pos);
-    if (!d) continue;
+  for (const c of candidates) {
+    const targetSense=await exactTargetSense(env.DB,c);
+    if (!targetSense) continue;
+    // Hard stop against mismatched definitions/POS. Better to show fewer good
+    // pairs than a larger list of misleading ones.
+    if (targetSense.pos!==anchorSense.pos) continue;
+
     const note=await pairNote(env.DB,norm,c.word,mode);
-    const generic=genericExplanation(anchorSense.lemma,d.word,mode,c);
+    const generic=groundedExplanation(anchorSense,targetSense,mode,c);
     decorated.push({
-      word:d.word,pos:d.pos,definition:d.definition,
-      label:chooseRelationLabel(mode,c),score:Math.round(c.score*10)/10,
+      word:targetSense.lemma,
+      pos:posName(targetSense.pos),
+      definition:targetSense.definition,
+      senseId:targetSense.sense_id,
+      synsetId:targetSense.synset_id,
+      label:chooseRelationLabel(mode,c),
+      score:Math.round(c.score*10)/10,
       connection:note?.connection||generic.connection,
       distinction:note?.distinction||generic.distinction,
-      examples:note?JSON.parse(note.examples_json||'[]'):d.examples.slice(0,2),
-      curated:Boolean(note)
+      examples:note?JSON.parse(note.examples_json||'[]'):(targetSense.examples||[]).slice(0,2),
+      curated:Boolean(note),
+      evidence:c.sameSynset?'same-synset':(c.directAntonym?'direct-antonym':'lexical')
     });
   }
 
   return {
     query:norm,
     mode,
-    anchor:{word:anchorSense.lemma,pos:posName(anchorSense.pos),definition:anchorSense.definition,examples:(anchorSense.examples||[]).slice(0,2),senseId:anchorSense.sense_id},
+    anchor:{
+      word:anchorSense.lemma,
+      pos:posName(anchorSense.pos),
+      definition:anchorSense.definition,
+      examples:(anchorSense.examples||[]).slice(0,2),
+      senseId:anchorSense.sense_id,
+      synsetId:anchorSense.synset_id,
+    },
     alternatives:decorated,
     senses:senses.slice(0,8).map(s=>({senseId:s.sense_id,pos:posName(s.pos),definition:s.definition})),
     senseCount:senses.length,
-    source:{dictionary:'Open English WordNet 2025',relatedness:'ConceptNet enrichment + Word Junction ranking'}
+    quality:{
+      samePartOfSpeechOnly:true,
+      exactSenseDefinitions:true,
+      conceptNetUsed:false,
+      unsupportedNuanceSuppressed:true,
+    },
+    source:{dictionary:'Open English WordNet 2025',relatedness:'Exact WordNet lexical relationships + Word Junction ranking'}
   };
 }
 
