@@ -12,7 +12,7 @@ const ranked=rankCandidates([
 
 assert.equal(ranked[0].word,'lucid');
 assert.ok(ranked.findIndex(x=>x.word==='clarify') > ranked.findIndex(x=>x.word==='transparent'));
-assert.equal(chooseRelationLabel('similar',ranked[0]),'Same dictionary sense');
-assert.equal(chooseRelationLabel('similar',{directSynonym:true}),'Direct synonym');
-assert.equal(chooseRelationLabel('opposite',{directAntonym:true}),'Direct opposite in this sense');
+assert.equal(chooseRelationLabel('similar',ranked[0]),'Same core meaning');
+assert.equal(chooseRelationLabel('similar',{directSynonym:true}),'Very close in meaning');
+assert.equal(chooseRelationLabel('opposite',{directAntonym:true}),'These are opposites here');
 console.log('rank tests passed');
