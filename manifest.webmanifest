@@ -1,6 +1,6 @@
 {
-  "name": "Word Junction",
-  "short_name": "Junction",
+  "name": "Word Junctions",
+  "short_name": "Junctions",
   "description": "Learn vocabulary one useful word connection at a time.",
   "start_url": "./",
   "scope": "./",
