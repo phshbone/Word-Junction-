@@ -56,7 +56,7 @@ jobs:
           const text=sel=>page.locator(sel).textContent().then(x=>x.trim());
           try{
             await page.goto('https://phshbone.github.io/Word-Junction-/?live-smoke=4',{waitUntil:'networkidle',timeout:60000});
-            await page.waitForSelector('#buildMarker');
+            await page.waitForSelector('#buildMarker',{state:'attached'});
             assert.equal(await text('#buildMarker'),'two-card-junction-v4');
             assert.equal(await page.locator('#relationshipPill').evaluate(el=>getComputedStyle(el).pointerEvents),'none');
             assert(await page.locator('#connectCard').isVisible());
