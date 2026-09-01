@@ -41,8 +41,8 @@ export function rankCandidates(candidates, context={}) {
 }
 
 export function chooseRelationLabel(mode, candidate) {
-  if (mode === 'opposite') return candidate.directAntonym ? 'These are opposites here' : 'These meanings contrast';
-  if (candidate.sameSynset) return 'Same core meaning';
-  if (candidate.directSynonym) return 'Very close in meaning';
-  return 'Related, but used differently';
+  if (mode === 'opposite') return candidate.directAntonym ? 'Opposite in this sense' : 'Contrasting senses';
+  if (candidate.sameSynset) return 'Same sense';
+  if (candidate.directSynonym) return 'Synonyms in this sense';
+  return 'Related in this sense';
 }
