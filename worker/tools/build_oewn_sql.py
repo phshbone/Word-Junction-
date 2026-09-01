@@ -5,6 +5,10 @@ Each normalized lemma hashes to one of a fixed number of buckets. A bucket is
 stored as one JSON row in D1, which keeps a complete OEWN import well below the
 free plan's daily row-write ceiling while preserving arbitrary-word lookup.
 
+Relationship tuples deliberately preserve target sense/synset IDs. Word
+Junction uses those IDs at runtime so the definition shown on screen is the
+same sense that created the relationship.
+
 Examples:
   python -m pip install "wn>=1.1,<2"
   python tools/build_oewn_sql.py --out-dir build/oewn
@@ -64,17 +68,20 @@ def compact_sense(sense):
         if norm(m) == norm(lemma) or key in seen:
             continue
         seen.add(key)
-        synonyms.append([m, member.pos])
+        # Synonyms are in this exact synset. Keep the synset id explicitly so
+        # the runtime can show the target definition from the same sense.
+        synonyms.append([m, member.pos, None, synset.id])
 
     antonyms = []
     seen_ant = set()
     for target in sense.get_related("antonym"):
         tw = target.word()
-        key = (norm(tw.lemma()), tw.pos)
+        ts = target.synset()
+        key = (norm(tw.lemma()), tw.pos, target.id)
         if key in seen_ant:
             continue
         seen_ant.add(key)
-        antonyms.append([tw.lemma(), tw.pos])
+        antonyms.append([tw.lemma(), tw.pos, target.id, ts.id])
 
     return {
         "l": lemma,
