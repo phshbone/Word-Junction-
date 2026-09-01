@@ -145,31 +145,39 @@ function cleanGloss(text='') {
   return String(text).trim().replace(/[.;:]$/,'');
 }
 
-function plainExplanation(anchorSense, targetSense, mode, candidate) {
+function plainExplanation(anchorSense, targetSense, mode, candidate, anchorSenseCount=1) {
   const anchor=anchorSense.lemma;
   const target=targetSense.lemma;
   const anchorGloss=cleanGloss(anchorSense.definition);
   const targetGloss=cleanGloss(targetSense.definition);
+  const pos=posName(anchorSense.pos);
+  const multiSense=anchorSenseCount>1;
 
   if (mode==='opposite') {
     return {
-      connection:`${anchor} and ${target} point in opposite directions here.`,
-      distinction:`${anchor} means “${anchorGloss || 'the meaning shown above'}.” ${target} means “${targetGloss || 'the meaning shown above'}.”`
+      connection:`In this sense, ${anchor} and ${target} point in opposite directions.`,
+      distinction:multiSense
+        ? `This pairing uses one specific ${pos} sense of ${anchor}; it does not apply to every meaning of the word.`
+        : `The opposition applies to the meanings shown here, not automatically to every possible use of either word.`
     };
   }
 
   if (candidate.sameSynset) {
     return {
       connection:anchorGloss
-        ? `Both words can mean “${anchorGloss}.”`
-        : `${anchor} and ${target} share the same core meaning here.`,
-      distinction:`They are close enough to share this meaning. Word Junction will only describe a finer usage difference when we have specific evidence for this exact pair.`
+        ? `In this sense, both ${anchor} and ${target} can mean “${anchorGloss}.”`
+        : `In this sense, ${anchor} and ${target} share the same dictionary meaning.`,
+      distinction:multiSense
+        ? `This is one specific ${pos} sense of ${anchor}. The words overlap here, but that does not make them interchangeable in every use.`
+        : `The words overlap in this exact sense, but that does not make them interchangeable in every use.`
     };
   }
 
   return {
-    connection:`${anchor} and ${target} are connected in meaning here.`,
-    distinction:`They are related, but not automatically interchangeable.`
+    connection:`In this sense, ${anchor} and ${target} are connected in meaning.`,
+    distinction:multiSense
+      ? `This pairing uses one specific ${pos} sense of ${anchor}; the relationship may not hold for its other meanings.`
+      : `They are related here, but not automatically interchangeable.`
   };
 }
 
@@ -180,28 +188,35 @@ async function lookup(env, word, mode='similar') {
   if (!senses.length) return {error:`“${word}” is not in the loaded Open English WordNet dataset.`};
 
   const anchorSense=chooseAnchorSense(senses,mode);
+  const anchorSenseIndex=Math.max(0,senses.findIndex(s=>s.sense_id===anchorSense.sense_id));
   let candidates=candidatesForSense(anchorSense,mode);
   candidates=rankCandidates(candidates,{anchor:norm}).slice(0,12);
 
   const decorated=[];
   for (const c of candidates) {
+    const targetSenses=await getSenses(env.DB,c.word);
     const targetSense=await exactTargetSense(env.DB,c);
     if (!targetSense) continue;
     if (targetSense.pos!==anchorSense.pos) continue;
 
     const note=await pairNote(env.DB,norm,c.word,mode);
-    const generic=plainExplanation(anchorSense,targetSense,mode,c);
+    const generic=plainExplanation(anchorSense,targetSense,mode,c,senses.length);
+    const sourceExamples=[...(anchorSense.examples||[]),...(targetSense.examples||[])].filter(Boolean);
+    const examples=note?JSON.parse(note.examples_json||'[]'):(targetSense.examples||[]).slice(0,2);
     decorated.push({
       word:targetSense.lemma,
       pos:posName(targetSense.pos),
       definition:targetSense.definition,
       senseId:targetSense.sense_id,
       synsetId:targetSense.synset_id,
+      senseNumber:Math.max(1,targetSenses.findIndex(s=>s.sense_id===targetSense.sense_id)+1),
+      senseCount:targetSenses.length,
       label:chooseRelationLabel(mode,c),
       score:Math.round(c.score*10)/10,
       connection:note?.connection||generic.connection,
       distinction:note?.distinction||generic.distinction,
-      examples:note?JSON.parse(note.examples_json||'[]'):(targetSense.examples||[]).slice(0,2),
+      examples,
+      usageExample:(examples[0]||sourceExamples[0]||''),
       curated:Boolean(note),
       evidence:c.sameSynset?'same-synset':(c.directAntonym?'direct-antonym':'lexical')
     });
@@ -217,15 +232,19 @@ async function lookup(env, word, mode='similar') {
       examples:(anchorSense.examples||[]).slice(0,2),
       senseId:anchorSense.sense_id,
       synsetId:anchorSense.synset_id,
+      senseNumber:anchorSenseIndex+1,
+      senseCount:senses.length,
+      senseNotice:senses.length>1?`This is one of ${senses.length} senses listed for ${anchorSense.lemma}.`:null,
     },
     alternatives:decorated,
-    senses:senses.slice(0,8).map(s=>({senseId:s.sense_id,pos:posName(s.pos),definition:s.definition})),
+    senses:senses.slice(0,8).map((s,i)=>({senseId:s.sense_id,pos:posName(s.pos),definition:s.definition,senseNumber:i+1})),
     senseCount:senses.length,
     quality:{
       samePartOfSpeechOnly:true,
       exactSenseDefinitions:true,
       conceptNetUsed:false,
       unsupportedNuanceSuppressed:true,
+      oneSenseOneConnection:true,
     },
     source:{dictionary:'Open English WordNet 2025',relatedness:'Exact WordNet lexical relationships + Word Junction ranking'}
   };
