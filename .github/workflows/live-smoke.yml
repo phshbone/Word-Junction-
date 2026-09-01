@@ -28,19 +28,19 @@ jobs:
         run: |
           python - <<'PY'
           import time, urllib.request
-          url='https://phshbone.github.io/Word-Junction-/?live-smoke=2'
+          url='https://phshbone.github.io/Word-Junction-/?live-smoke=3'
           for attempt in range(90):
               try:
-                  req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 Word-Junctions-Live-Smoke/2.0','Cache-Control':'no-cache'})
+                  req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 Word-Junctions-Live-Smoke/3.0','Cache-Control':'no-cache'})
                   with urllib.request.urlopen(req,timeout=20) as r:
                       html=r.read().decode('utf-8','replace')
-                  if 'two-card-junction-v2' in html:
-                      print('new Pages build is live')
+                  if 'two-card-junction-v3' in html:
+                      print('v3 Pages build is live')
                       raise SystemExit(0)
               except Exception as e:
                   print(f'wait {attempt+1}: {e}')
               time.sleep(5)
-          raise SystemExit('Timed out waiting for new Pages build')
+          raise SystemExit('Timed out waiting for v3 Pages build')
           PY
       - name: Run live browser smoke
         run: |
@@ -53,10 +53,11 @@ jobs:
           const consoleErrors=[];
           page.on('console',m=>{if(m.type()==='error')consoleErrors.push(m.text())});
           page.on('pageerror',e=>consoleErrors.push(String(e)));
+          const text=sel=>page.locator(sel).textContent().then(x=>x.trim());
           try{
-            await page.goto('https://phshbone.github.io/Word-Junction-/?live-smoke=2',{waitUntil:'networkidle',timeout:60000});
+            await page.goto('https://phshbone.github.io/Word-Junction-/?live-smoke=3',{waitUntil:'networkidle',timeout:60000});
             await page.waitForSelector('#buildMarker');
-            assert.equal(await page.locator('#buildMarker').textContent(),'two-card-junction-v2');
+            assert.equal(await text('#buildMarker'),'two-card-junction-v3');
             assert.equal(await page.locator('#relationshipPill').evaluate(el=>getComputedStyle(el).pointerEvents),'none');
             assert((await page.locator('.brand-lockup').boundingBox()).width>100);
 
@@ -64,51 +65,54 @@ jobs:
             await page.locator('#wordSearch').fill('motion');
             await page.locator('#searchForm button[type="submit"]').click();
             await page.waitForFunction(()=>document.querySelector('#anchorWord')?.textContent?.trim()==='motion',{timeout:30000});
-            const similarRelated=(await page.locator('#relatedWord').textContent()).trim();
-            assert(similarRelated && similarRelated!=='—');
+            const originalTop=await text('#anchorWord');
+            const originalBottom=await text('#relatedWord');
+            assert(originalBottom && originalBottom!=='—');
 
-            // Top refresh now branches to a connected word instead of opening search.
-            await page.locator('#changeAnchor').click();
-            await page.waitForFunction(()=>document.querySelector('#anchorWord')?.textContent?.trim()!=='motion',{timeout:30000});
-            assert(!(await page.locator('#wordDialog').isVisible()));
-            await page.locator('#backBtn').click();
-            await page.waitForFunction(()=>document.querySelector('#anchorWord')?.textContent?.trim()==='motion',{timeout:30000});
-
-            // Bottom refresh must always do something useful: cycle or continue from the only connection.
-            const beforeAnchor=(await page.locator('#anchorWord').textContent()).trim();
-            const beforeRelated=(await page.locator('#relatedWord').textContent()).trim();
+            // Bottom refresh keeps the top card fixed.
             await page.locator('#changeRelated').click();
-            await page.waitForTimeout(1000);
-            const afterAnchor=(await page.locator('#anchorWord').textContent()).trim();
-            const afterRelated=(await page.locator('#relatedWord').textContent()).trim();
-            assert(afterAnchor!==beforeAnchor || afterRelated!==beforeRelated);
+            await page.waitForTimeout(1300);
+            assert.equal(await text('#anchorWord'),originalTop);
+            assert(!(await page.locator('#wordDialog').isVisible()));
 
+            // Reset, then top refresh keeps the bottom card fixed.
+            await page.locator('#newBtn').click();
+            await page.locator('#wordSearch').fill('motion');
+            await page.locator('#searchForm button[type="submit"]').click();
+            await page.waitForFunction(()=>document.querySelector('#anchorWord')?.textContent?.trim()==='motion',{timeout:30000});
+            const fixedBottom=await text('#relatedWord');
+            await page.locator('#changeAnchor').click();
+            await page.waitForTimeout(1300);
+            assert.equal(await text('#relatedWord'),fixedBottom);
+            assert(!(await page.locator('#wordDialog').isVisible()));
+
+            // Similar/Opposite remains functional.
             await page.locator('#newBtn').click();
             await page.locator('#wordSearch').fill('motion');
             await page.locator('#searchForm button[type="submit"]').click();
             await page.waitForFunction(()=>document.querySelector('#anchorWord')?.textContent?.trim()==='motion',{timeout:30000});
             await page.locator('#oppositeTab').click();
             await page.waitForFunction(()=>document.querySelector('#oppositeTab')?.classList.contains('active'),{timeout:30000});
-            const oppositeRelated=(await page.locator('#relatedWord').textContent()).trim();
+            const oppositeRelated=await text('#relatedWord');
             assert(oppositeRelated && oppositeRelated!=='—');
             assert((await page.locator('#junction').getAttribute('class')).includes('opposite'));
 
             await page.locator('#similarTab').click();
             await page.waitForFunction(()=>document.querySelector('#similarTab')?.classList.contains('active'),{timeout:30000});
-            const pivot=(await page.locator('#relatedWord').textContent()).trim();
+            const pivot=await text('#relatedWord');
             await page.locator('#exploreBtn').click();
             await page.waitForFunction(expected=>document.querySelector('#anchorWord')?.textContent?.trim()===expected,pivot,{timeout:30000});
             assert(!(await page.locator('#backBtn').isDisabled()));
 
             await page.locator('#saveBtn').click();
-            assert((await page.locator('#saveBtn').textContent()).includes('Saved'));
+            assert((await text('#saveBtn')).includes('Saved'));
             await page.locator('#exampleBtn').click();
             assert(await page.locator('#exampleDialog').isVisible());
             await page.locator('[data-close="exampleDialog"]').click();
 
             await page.screenshot({path:'/tmp/word-junctions-live-smoke.png',fullPage:true});
             if(consoleErrors.length) throw new Error('Console errors: '+consoleErrors.join(' | '));
-            console.log(JSON.stringify({status:'PASS',similarRelated,oppositeRelated,pivot}));
+            console.log(JSON.stringify({status:'PASS',originalTop,originalBottom,oppositeRelated,pivot}));
           }catch(e){
             await page.screenshot({path:'/tmp/word-junctions-live-smoke-failure.png',fullPage:true}).catch(()=>{});
             console.error(e);
