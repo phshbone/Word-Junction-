@@ -1,0 +1,35 @@
+name: compact junction build
+
+on:
+  push:
+    paths:
+      - '.github/workflows/ui-compact-junction.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Apply compact junction patch
+        run: python tools/ui_patch_v4.py
+      - name: Check JavaScript syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('index.html').read_text(); a=s.index('<script>')+8; b=s.index('</script>',a); Path('/tmp/app.js').write_text(s[a:b])
+          PY
+          node --check /tmp/app.js
+      - name: Commit compact junction build
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html sw.js
+          git commit -m "Build compact junction explanation layout"
+          git push
