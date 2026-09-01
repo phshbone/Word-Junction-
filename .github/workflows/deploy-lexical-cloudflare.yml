@@ -46,6 +46,11 @@ jobs:
           import json, urllib.error, urllib.request
 
           base='https://word-junction-lexical.phshbone.workers.dev'
+          headers={
+              'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0 Safari/537.36 Word-Junction-Smoke-Test/1.0',
+              'Accept':'application/json,text/plain,*/*',
+              'Accept-Language':'en-US,en;q=0.9',
+          }
           checks=(
               ('/health', 'health', False),
               ('/lookup?word=clear&mode=similar', 'lookup', True),
@@ -54,8 +59,9 @@ jobs:
           )
 
           for path, kind, require_alternatives in checks:
+              req=urllib.request.Request(base+path, headers=headers, method='GET')
               try:
-                  with urllib.request.urlopen(base+path, timeout=30) as r:
+                  with urllib.request.urlopen(req, timeout=30) as r:
                       status=r.status
                       body=json.load(r)
               except urllib.error.HTTPError as e:
