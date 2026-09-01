@@ -108,14 +108,11 @@ function antonymCandidates(sense) {
 
 function candidatesForSense(sense, mode) {
   const items=mode==='opposite' ? antonymCandidates(sense) : synonymCandidates(sense);
-  // Quality rule: Similar/Opposite should compare like grammatical roles.
   const samePos=items.filter(c=>c.samePos);
   return samePos.length?samePos:[];
 }
 
 function chooseAnchorSense(senses, mode) {
-  // Prefer the earliest WordNet sense that has a same-POS relationship. This
-  // keeps the displayed definition tied to the exact relationship being used.
   return senses.find(s=>candidatesForSense(s,mode).length) || senses[0];
 }
 
@@ -148,30 +145,31 @@ function cleanGloss(text='') {
   return String(text).trim().replace(/[.;:]$/,'');
 }
 
-function groundedExplanation(anchorSense, targetSense, mode, candidate) {
+function plainExplanation(anchorSense, targetSense, mode, candidate) {
   const anchor=anchorSense.lemma;
   const target=targetSense.lemma;
-  const gloss=cleanGloss(anchorSense.definition);
+  const anchorGloss=cleanGloss(anchorSense.definition);
+  const targetGloss=cleanGloss(targetSense.definition);
 
   if (mode==='opposite') {
     return {
-      connection:`In this sense, ${target} is a direct antonym of ${anchor}.`,
-      distinction:`This opposition belongs to the displayed ${posName(anchorSense.pos)} sense${gloss?` — “${gloss}.”`:'.'} Other senses of either word may not be opposites.`
+      connection:`${anchor} and ${target} point in opposite directions here.`,
+      distinction:`${anchor} means “${anchorGloss || 'the meaning shown above'}.” ${target} means “${targetGloss || 'the meaning shown above'}.”`
     };
   }
 
   if (candidate.sameSynset) {
     return {
-      connection:gloss
-        ? `Both words can express this sense: “${gloss}.”`
-        : `${anchor} and ${target} are grouped in the same Open English WordNet sense.`,
-      distinction:`Open English WordNet treats them as synonyms in this exact sense. Word Junction will only claim a finer difference in tone or usage when that distinction is specifically supported for this pair.`
+      connection:anchorGloss
+        ? `Both words can mean “${anchorGloss}.”`
+        : `${anchor} and ${target} share the same core meaning here.`,
+      distinction:`They are close enough to share this meaning. Word Junction will only describe a finer usage difference when we have specific evidence for this exact pair.`
     };
   }
 
   return {
-    connection:`${anchor} and ${target} are related in the displayed sense.`,
-    distinction:`Word Junction does not have enough exact lexical evidence to call them interchangeable.`
+    connection:`${anchor} and ${target} are connected in meaning here.`,
+    distinction:`They are related, but not automatically interchangeable.`
   };
 }
 
@@ -189,12 +187,10 @@ async function lookup(env, word, mode='similar') {
   for (const c of candidates) {
     const targetSense=await exactTargetSense(env.DB,c);
     if (!targetSense) continue;
-    // Hard stop against mismatched definitions/POS. Better to show fewer good
-    // pairs than a larger list of misleading ones.
     if (targetSense.pos!==anchorSense.pos) continue;
 
     const note=await pairNote(env.DB,norm,c.word,mode);
-    const generic=groundedExplanation(anchorSense,targetSense,mode,c);
+    const generic=plainExplanation(anchorSense,targetSense,mode,c);
     decorated.push({
       word:targetSense.lemma,
       pos:posName(targetSense.pos),
