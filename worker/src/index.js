@@ -7,6 +7,7 @@ const JSON_HEADERS = {
   'access-control-allow-methods':'GET,OPTIONS',
 };
 const LEXICAL_BUCKETS = 8192;
+const MAX_ALTERNATIVES = 24;
 
 function json(data, status=200, extra={}) {
   return new Response(JSON.stringify(data), {status, headers:{...JSON_HEADERS,...extra}});
@@ -108,12 +109,61 @@ function antonymCandidates(sense) {
 
 function candidatesForSense(sense, mode) {
   const items=mode==='opposite' ? antonymCandidates(sense) : synonymCandidates(sense);
-  const samePos=items.filter(c=>c.samePos);
-  return samePos.length?samePos:[];
+  return items.filter(c=>c.samePos);
 }
 
 function chooseAnchorSense(senses, mode) {
   return senses.find(s=>candidatesForSense(s,mode).length) || senses[0];
+}
+
+function senseContext(sense, allSenses) {
+  const senseIndex=Math.max(0,allSenses.findIndex(s=>s.sense_id===sense.sense_id));
+  const samePos=allSenses.filter(s=>s.pos===sense.pos);
+  const posIndex=Math.max(0,samePos.findIndex(s=>s.sense_id===sense.sense_id));
+  return {
+    word:sense.lemma,
+    pos:posName(sense.pos),
+    definition:sense.definition,
+    examples:(sense.examples||[]).slice(0,2),
+    senseId:sense.sense_id,
+    synsetId:sense.synset_id,
+    senseNumber:senseIndex+1,
+    senseCount:allSenses.length,
+    partOfSpeechSenseNumber:posIndex+1,
+    partOfSpeechSenseCount:samePos.length,
+  };
+}
+
+function pooledCandidates(senses, mode) {
+  const primary=chooseAnchorSense(senses,mode);
+  const anchorPos=primary.pos;
+  const samePosSenses=senses.filter(s=>s.pos===anchorPos);
+  const candidates=[];
+
+  samePosSenses.forEach((sense,posIndex)=>{
+    for (const candidate of candidatesForSense(sense,mode)) {
+      candidates.push({
+        ...candidate,
+        sourceSenseOrder:posIndex,
+        primarySense:sense.sense_id===primary.sense_id,
+      });
+    }
+  });
+
+  const ranked=rankCandidates(candidates,{anchor:primary.lemma})
+    .map(c=>({...c, score:c.score + (c.primarySense?60:Math.max(-36,18-(c.sourceSenseOrder*6)))}))
+    .sort((a,b)=>b.score-a.score || a.word.localeCompare(b.word));
+
+  const deduped=[];
+  const seen=new Set();
+  for (const candidate of ranked) {
+    const key=normalizeWord(candidate.word);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(candidate);
+    if (deduped.length>=MAX_ALTERNATIVES) break;
+  }
+  return {primary, samePosSenses, candidates:deduped};
 }
 
 async function exactTargetSense(db, candidate) {
@@ -149,7 +199,6 @@ function plainExplanation(anchorSense, targetSense, mode, candidate, anchorSense
   const anchor=anchorSense.lemma;
   const target=targetSense.lemma;
   const anchorGloss=cleanGloss(anchorSense.definition);
-  const targetGloss=cleanGloss(targetSense.definition);
   const pos=posName(anchorSense.pos);
   const multiSense=anchorSenseCount>1;
 
@@ -187,22 +236,25 @@ async function lookup(env, word, mode='similar') {
   const senses = await getSenses(env.DB, norm);
   if (!senses.length) return {error:`“${word}” is not in the loaded Open English WordNet dataset.`};
 
-  const anchorSense=chooseAnchorSense(senses,mode);
-  const anchorSenseIndex=Math.max(0,senses.findIndex(s=>s.sense_id===anchorSense.sense_id));
-  let candidates=candidatesForSense(anchorSense,mode);
-  candidates=rankCandidates(candidates,{anchor:norm}).slice(0,12);
-
+  const pool=pooledCandidates(senses,mode);
+  const anchorSense=pool.primary;
+  const primaryContext=senseContext(anchorSense,senses);
+  const sourceSenseMap=new Map(senses.map(s=>[s.sense_id,s]));
   const decorated=[];
-  for (const c of candidates) {
+
+  for (const c of pool.candidates) {
+    const sourceSense=sourceSenseMap.get(c.sourceSenseId) || anchorSense;
     const targetSenses=await getSenses(env.DB,c.word);
     const targetSense=await exactTargetSense(env.DB,c);
     if (!targetSense) continue;
-    if (targetSense.pos!==anchorSense.pos) continue;
+    if (targetSense.pos!==sourceSense.pos) continue;
 
+    const sourceContext=senseContext(sourceSense,senses);
     const note=await pairNote(env.DB,norm,c.word,mode);
-    const generic=plainExplanation(anchorSense,targetSense,mode,c,senses.length);
-    const sourceExamples=[...(anchorSense.examples||[]),...(targetSense.examples||[])].filter(Boolean);
+    const generic=plainExplanation(sourceSense,targetSense,mode,c,senses.length);
+    const sourceExamples=[...(sourceSense.examples||[]),...(targetSense.examples||[])].filter(Boolean);
     const examples=note?JSON.parse(note.examples_json||'[]'):(targetSense.examples||[]).slice(0,2);
+    const senseShift=sourceSense.sense_id!==anchorSense.sense_id;
     decorated.push({
       word:targetSense.lemma,
       pos:posName(targetSense.pos),
@@ -218,7 +270,12 @@ async function lookup(env, word, mode='similar') {
       examples,
       usageExample:(examples[0]||sourceExamples[0]||''),
       curated:Boolean(note),
-      evidence:c.sameSynset?'same-synset':(c.directAntonym?'direct-antonym':'lexical')
+      evidence:c.sameSynset?'same-synset':(c.directAntonym?'direct-antonym':'lexical'),
+      anchorSense:sourceContext,
+      senseShift,
+      senseNote:senseShift
+        ? `This connection uses ${sourceContext.pos} sense ${sourceContext.partOfSpeechSenseNumber} of ${sourceContext.partOfSpeechSenseCount} for “${sourceContext.word}.”`
+        : null,
     });
   }
 
@@ -226,27 +283,35 @@ async function lookup(env, word, mode='similar') {
     query:norm,
     mode,
     anchor:{
-      word:anchorSense.lemma,
-      pos:posName(anchorSense.pos),
-      definition:anchorSense.definition,
-      examples:(anchorSense.examples||[]).slice(0,2),
-      senseId:anchorSense.sense_id,
-      synsetId:anchorSense.synset_id,
-      senseNumber:anchorSenseIndex+1,
-      senseCount:senses.length,
+      ...primaryContext,
       senseNotice:senses.length>1?`This is one of ${senses.length} senses listed for ${anchorSense.lemma}.`:null,
     },
     alternatives:decorated,
-    senses:senses.slice(0,8).map((s,i)=>({senseId:s.sense_id,pos:posName(s.pos),definition:s.definition,senseNumber:i+1})),
+    senses:senses.slice(0,12).map((s,i)=>({
+      senseId:s.sense_id,
+      pos:posName(s.pos),
+      definition:s.definition,
+      senseNumber:i+1,
+      hasSimilar:candidatesForSense(s,'similar').length>0,
+      hasOpposite:candidatesForSense(s,'opposite').length>0,
+    })),
     senseCount:senses.length,
+    pool:{
+      partOfSpeech:posName(anchorSense.pos),
+      partOfSpeechSenseCount:pool.samePosSenses.length,
+      candidateCount:decorated.length,
+      primarySenseId:anchorSense.sense_id,
+    },
     quality:{
       samePartOfSpeechOnly:true,
       exactSenseDefinitions:true,
+      multiSensePool:true,
+      senseContextTravelsWithPair:true,
       conceptNetUsed:false,
       unsupportedNuanceSuppressed:true,
       oneSenseOneConnection:true,
     },
-    source:{dictionary:'Open English WordNet 2025',relatedness:'Exact WordNet lexical relationships + Word Junction ranking'}
+    source:{dictionary:'Open English WordNet 2025',relatedness:'Exact WordNet lexical relationships across ranked same-part-of-speech senses + Word Junction ranking'}
   };
 }
 
