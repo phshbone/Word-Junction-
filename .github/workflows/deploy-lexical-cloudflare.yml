@@ -50,12 +50,14 @@ jobs:
               'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0 Safari/537.36 Word-Junction-Smoke-Test/1.0',
               'Accept':'application/json,text/plain,*/*',
               'Accept-Language':'en-US,en;q=0.9',
+              'Cache-Control':'no-cache',
           }
           checks=(
               ('/health', 'health', False),
               ('/lookup?word=clear&mode=similar', 'lookup', True),
               ('/lookup?word=hot&mode=opposite', 'lookup', True),
               ('/lookup?word=junction&mode=similar', 'lookup', False),
+              ('/lookup?word=motion&mode=similar', 'motion', True),
           )
 
           for path, kind, require_alternatives in checks:
@@ -71,7 +73,7 @@ jobs:
               print(path, {'status':status, **(body if kind=='health' else {
                   'query':body.get('query'),
                   'mode':body.get('mode'),
-                  'alternatives':len(body.get('alternatives',[])),
+                  'alternatives':[x.get('word') for x in body.get('alternatives',[])],
                   'error':body.get('error'),
               })})
 
@@ -85,4 +87,10 @@ jobs:
                   assert isinstance(body.get('alternatives'), list), body
                   if require_alternatives:
                       assert body['alternatives'], body
+              if kind=='motion':
+                  assert body.get('quality',{}).get('pedagogicalSenseGate') is True, body
+                  assert body.get('quality',{}).get('maxAutomaticSenseBreadth') == 3, body
+                  words={x.get('word','').lower() for x in body.get('alternatives',[])}
+                  assert 'question' not in words, body
+                  assert all((x.get('anchorSense',{}).get('partOfSpeechSenseNumber') or 1) <= 3 for x in body.get('alternatives',[])), body
           PY
