@@ -7,7 +7,8 @@ const JSON_HEADERS = {
   'access-control-allow-methods':'GET,OPTIONS',
 };
 const LEXICAL_BUCKETS = 8192;
-const MAX_ALTERNATIVES = 24;
+const MAX_ALTERNATIVES = 12;
+const MAX_EVERYDAY_SENSES = 3;
 
 function json(data, status=200, extra={}) {
   return new Response(JSON.stringify(data), {status, headers:{...JSON_HEADERS,...extra}});
@@ -137,10 +138,21 @@ function senseContext(sense, allSenses) {
 function pooledCandidates(senses, mode) {
   const primary=chooseAnchorSense(senses,mode);
   const anchorPos=primary.pos;
-  const samePosSenses=senses.filter(s=>s.pos===anchorPos);
-  const candidates=[];
+  const allSamePosSenses=senses.filter(s=>s.pos===anchorPos);
+  const primaryPosIndex=Math.max(0,allSamePosSenses.findIndex(s=>s.sense_id===primary.sense_id));
 
-  samePosSenses.forEach((sense,posIndex)=>{
+  // Word Junctions is a teaching tool, not a thesaurus dump. Stay within the
+  // first few same-part-of-speech senses by default. If WordNet's first usable
+  // sense is already farther down the list, keep that exact sense but do not
+  // fan out across several other rare/specialized senses automatically.
+  const everydaySenses=primaryPosIndex<MAX_EVERYDAY_SENSES
+    ? allSamePosSenses.slice(0,MAX_EVERYDAY_SENSES)
+    : [primary];
+  if (!everydaySenses.some(s=>s.sense_id===primary.sense_id)) everydaySenses.unshift(primary);
+
+  const candidates=[];
+  everydaySenses.forEach((sense)=>{
+    const posIndex=Math.max(0,allSamePosSenses.findIndex(s=>s.sense_id===sense.sense_id));
     for (const candidate of candidatesForSense(sense,mode)) {
       candidates.push({
         ...candidate,
@@ -151,19 +163,27 @@ function pooledCandidates(senses, mode) {
   });
 
   const ranked=rankCandidates(candidates,{anchor:primary.lemma})
-    .map(c=>({...c, score:c.score + (c.primarySense?60:Math.max(-36,18-(c.sourceSenseOrder*6)))}))
+    .map(c=>({...c,
+      // Exact current-sense relationships dominate. Nearby everyday senses can
+      // supplement a thin pool, but later senses pay a steep pedagogical cost.
+      score:c.score + (c.primarySense?80:Math.max(-90,8-(c.sourceSenseOrder*28)))
+    }))
     .sort((a,b)=>b.score-a.score || a.word.localeCompare(b.word));
 
+  const best=ranked[0]?.score ?? -Infinity;
   const deduped=[];
   const seen=new Set();
   for (const candidate of ranked) {
     const key=normalizeWord(candidate.word);
     if (!key || seen.has(key)) continue;
+    // Do not keep technically valid but pedagogically distant leftovers merely
+    // to make the list longer. They can reappear if that sense becomes primary.
+    if (!candidate.primarySense && candidate.score < best-70) continue;
     seen.add(key);
     deduped.push(candidate);
     if (deduped.length>=MAX_ALTERNATIVES) break;
   }
-  return {primary, samePosSenses, candidates:deduped};
+  return {primary, samePosSenses:everydaySenses, candidates:deduped};
 }
 
 async function exactTargetSense(db, candidate) {
@@ -306,12 +326,14 @@ async function lookup(env, word, mode='similar') {
       samePartOfSpeechOnly:true,
       exactSenseDefinitions:true,
       multiSensePool:true,
+      pedagogicalSenseGate:true,
+      maxAutomaticSenseBreadth:MAX_EVERYDAY_SENSES,
       senseContextTravelsWithPair:true,
       conceptNetUsed:false,
       unsupportedNuanceSuppressed:true,
       oneSenseOneConnection:true,
     },
-    source:{dictionary:'Open English WordNet 2025',relatedness:'Exact WordNet lexical relationships across ranked same-part-of-speech senses + Word Junction ranking'}
+    source:{dictionary:'Open English WordNet 2025',relatedness:'Exact WordNet lexical relationships across ranked everyday same-part-of-speech senses + Word Junction teaching-quality gate'}
   };
 }
 
