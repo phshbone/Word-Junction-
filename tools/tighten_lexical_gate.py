@@ -1,45 +1,11 @@
 from pathlib import Path
+import re
 
 p = Path('worker/src/index.js')
 s = p.read_text()
 
-s = s.replace("const MAX_ALTERNATIVES = 24;", "const MAX_ALTERNATIVES = 12;\nconst MAX_EVERYDAY_SENSES = 3;")
-
-old = """function pooledCandidates(senses, mode) {
-  const primary=chooseAnchorSense(senses,mode);
-  const anchorPos=primary.pos;
-  const samePosSenses=senses.filter(s=>s.pos===anchorPos);
-  const candidates=[];
-
-  samePosSenses.forEach((sense,posIndex)=>{
-    for (const candidate of candidatesForSense(sense,mode)) {
-      candidates.push({
-        ...candidate,
-        sourceSenseOrder:posIndex,
-        primarySense:sense.sense_id===primary.sense_id,
-      });
-    }
-  });
-
-  const ranked=rankCandidates(candidates,{anchor:primary.lemma})
-    .map(c=>({...c, score:c.score + (c.primarySense?60:Math.max(-36,18-(c.sourceSenseOrder*6))) }))
-    .sort((a,b)=>b.score-a.score || a.word.localeCompare(b.word));
-
-  const deduped=[];
-  const seen=new Set();
-  for (const candidate of ranked) {
-    const key=normalizeWord(candidate.word);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    deduped.push(candidate);
-    if (deduped.length>=MAX_ALTERNATIVES) break;
-  }
-  return {primary, samePosSenses, candidates:deduped};
-}"""
-
-# Accommodate exact current spacing in repository.
-if old not in s:
-    old = old.replace("))) }))", ")))})")
+if "const MAX_EVERYDAY_SENSES = 3;" not in s:
+    s = s.replace("const MAX_ALTERNATIVES = 24;", "const MAX_ALTERNATIVES = 12;\nconst MAX_EVERYDAY_SENSES = 3;")
 
 new = """function pooledCandidates(senses, mode) {
   const primary=chooseAnchorSense(senses,mode);
@@ -90,14 +56,22 @@ new = """function pooledCandidates(senses, mode) {
     if (deduped.length>=MAX_ALTERNATIVES) break;
   }
   return {primary, samePosSenses:everydaySenses, candidates:deduped};
-}"""
+}
 
-if old not in s:
-    raise SystemExit('pooledCandidates source block not found')
+"""
 
-s = s.replace(old, new, 1)
-s = s.replace("multiSensePool:true,", "multiSensePool:true,\n      pedagogicalSenseGate:true,\n      maxAutomaticSenseBreadth:MAX_EVERYDAY_SENSES,")
-s = s.replace("relatedness:'Exact WordNet lexical relationships across ranked same-part-of-speech senses + Word Junction ranking'", "relatedness:'Exact WordNet lexical relationships across ranked everyday same-part-of-speech senses + Word Junction teaching-quality gate'")
+pattern = r"function pooledCandidates\(senses, mode\) \{.*?\n\}\n\n(?=async function exactTargetSense)"
+s, count = re.subn(pattern, new, s, count=1, flags=re.S)
+if count != 1:
+    raise SystemExit(f'pooledCandidates patch count was {count}')
+
+if "pedagogicalSenseGate:true" not in s:
+    s = s.replace("multiSensePool:true,", "multiSensePool:true,\n      pedagogicalSenseGate:true,\n      maxAutomaticSenseBreadth:MAX_EVERYDAY_SENSES,")
+
+s = s.replace(
+    "relatedness:'Exact WordNet lexical relationships across ranked same-part-of-speech senses + Word Junction ranking'",
+    "relatedness:'Exact WordNet lexical relationships across ranked everyday same-part-of-speech senses + Word Junction teaching-quality gate'"
+)
 
 p.write_text(s)
 print('Tightened lexical sense gate')
