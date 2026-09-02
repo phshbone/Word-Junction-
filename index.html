@@ -51,7 +51,7 @@ const els={status:$('#status'),anchorCard:$('#anchorCard'),relatedCard:$('#relat
 let state={word:'practical',mode:'similar',data:null,index:0,label:"Today's word",loading:false,senseNotice:'',reversed:false};let history=[];let saved=JSON.parse(localStorage.getItem('wj-saved')||'[]');
 function dailyWord(){const d=new Date(),day=Math.floor(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())/86400000);return DAILY[day%DAILY.length]}
 function current(){return state.data?.alternatives?.[state.index]||null}
-function displayPair(){const r=current(),base=state.data?.anchor,ctx=r?.anchorSense,a=ctx?{...base,...ctx}:base;return state.reversed?{top:r,bottom:a}:{top:a,bottom:r}}
+function displayPair(){const r=current(),base=state.data?.anchor,ctx=r?.anchorSense,a=ctx?{...base,...ctx,word:base?.word||state.data?.query}:base;return state.reversed?{top:r,bottom:a}:{top:a,bottom:r}}
 function snapshot(){return {word:state.word,mode:state.mode,index:state.index,label:state.label,data:state.data,senseNotice:state.senseNotice||'',reversed:!!state.reversed}}
 function setStatus(msg='',error=false){els.status.textContent=msg;els.status.classList.toggle('show',!!msg);els.status.classList.toggle('error',error)}
 function toast(msg){els.toast.textContent=msg;els.toast.classList.add('show');clearTimeout(window.__toast);window.__toast=setTimeout(()=>els.toast.classList.remove('show'),1800)}
