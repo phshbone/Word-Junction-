@@ -144,3 +144,4 @@ jobs:
           name: word-junctions-live-smoke-screenshots
           path: /tmp/word-junctions-live-smoke*.png
           if-no-files-found: ignore
+# rerun after fixed-card refresh repair
