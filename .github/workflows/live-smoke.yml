@@ -28,25 +28,39 @@ jobs:
         run: |
           python - <<'PY'
           import time, urllib.request
-          url='https://phshbone.github.io/Word-Junction-/?live-smoke=4'
+          url='https://phshbone.github.io/Word-Junction-/?live-smoke=5'
           for attempt in range(90):
               try:
-                  req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 Word-Junctions-Live-Smoke/4.0','Cache-Control':'no-cache'})
+                  req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 Word-Junctions-Live-Smoke/5.0','Cache-Control':'no-cache'})
                   with urllib.request.urlopen(req,timeout=20) as r:
                       html=r.read().decode('utf-8','replace')
-                  if 'two-card-junction-v4' in html:
-                      print('v4 Pages build is live')
+                  if 'two-card-junction-v5' in html:
+                      print('v5 Pages build is live')
                       raise SystemExit(0)
               except Exception as e:
                   print(f'wait {attempt+1}: {e}')
               time.sleep(5)
-          raise SystemExit('Timed out waiting for v4 Pages build')
+          raise SystemExit('Timed out waiting for v5 Pages build')
           PY
       - name: Run live browser smoke
         run: |
           cat > live-smoke.mjs <<'EOF'
           import { chromium } from 'playwright';
           import assert from 'node:assert/strict';
+
+          let deep=null;
+          for(let i=0;i<60;i++){
+            try{
+              deep=await fetch('https://word-junction-lexical.phshbone.workers.dev/lookup?word=motion&mode=similar',{headers:{'cache-control':'no-cache'}}).then(r=>r.json());
+              if(deep?.quality?.multiSensePool) break;
+            }catch{}
+            await new Promise(r=>setTimeout(r,5000));
+          }
+          assert.equal(deep?.quality?.multiSensePool,true,'deep lexical backend not live');
+          assert.equal(deep?.quality?.samePartOfSpeechOnly,true);
+          assert(deep?.alternatives?.length>0);
+          assert(deep.alternatives.every(x=>x.anchorSense?.senseId));
+
           const browser=await chromium.launch({headless:true});
           const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
           const page=await context.newPage();
@@ -55,9 +69,9 @@ jobs:
           page.on('pageerror',e=>consoleErrors.push(String(e)));
           const text=sel=>page.locator(sel).textContent().then(x=>x.trim());
           try{
-            await page.goto('https://phshbone.github.io/Word-Junction-/?live-smoke=4',{waitUntil:'networkidle',timeout:60000});
+            await page.goto('https://phshbone.github.io/Word-Junction-/?live-smoke=5',{waitUntil:'networkidle',timeout:60000});
             await page.waitForSelector('#buildMarker',{state:'attached'});
-            assert.equal(await text('#buildMarker'),'two-card-junction-v4');
+            assert.equal(await text('#buildMarker'),'two-card-junction-v5');
             assert.equal(await page.locator('#relationshipPill').evaluate(el=>getComputedStyle(el).pointerEvents),'none');
             assert(await page.locator('#connectCard').isVisible());
             assert(await page.locator('#boundaryCard').isVisible());
@@ -82,7 +96,7 @@ jobs:
             assert.equal(await page.locator('#expandRelated').getAttribute('aria-expanded'),'false');
 
             await page.locator('#changeRelated').click();
-            await page.waitForTimeout(1300);
+            await page.waitForTimeout(1500);
             assert.equal(await text('#anchorWord'),originalTop);
             assert(!(await page.locator('#wordDialog').isVisible()));
 
@@ -92,7 +106,7 @@ jobs:
             await page.waitForFunction(()=>document.querySelector('#anchorWord')?.textContent?.trim()==='motion',{timeout:30000});
             const fixedBottom=await text('#relatedWord');
             await page.locator('#changeAnchor').click();
-            await page.waitForTimeout(1300);
+            await page.waitForTimeout(1500);
             assert.equal(await text('#relatedWord'),fixedBottom);
             assert(!(await page.locator('#wordDialog').isVisible()));
 
@@ -115,7 +129,7 @@ jobs:
 
             await page.screenshot({path:'/tmp/word-junctions-live-smoke.png',fullPage:true});
             if(consoleErrors.length) throw new Error('Console errors: '+consoleErrors.join(' | '));
-            console.log(JSON.stringify({status:'PASS',originalTop,originalBottom,oppositeRelated}));
+            console.log(JSON.stringify({status:'PASS',motionCandidates:deep.alternatives.length,motionPos:deep.pool?.partOfSpeech,originalTop,originalBottom,oppositeRelated}));
           }catch(e){
             await page.screenshot({path:'/tmp/word-junctions-live-smoke-failure.png',fullPage:true}).catch(()=>{});
             console.error(e);
