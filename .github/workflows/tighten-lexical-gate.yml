@@ -1,0 +1,34 @@
+name: tighten lexical teaching gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/tighten_lexical_gate.py'
+      - '.github/workflows/tighten-lexical-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tighten:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Apply lexical tightening
+        run: python tools/tighten_lexical_gate.py
+      - name: Check worker syntax and rank tests
+        run: |
+          node --check worker/src/index.js
+          node worker/test/rank.test.mjs
+      - name: Commit tightened lexical gate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add worker/src/index.js
+          git commit -m "Tighten automatic sense exploration"
+          git push
